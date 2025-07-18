@@ -1,0 +1,19 @@
+fastapi
+fastapi[standard]
+uvicorn
+uvicorn[standard]
+sqlalchemy
+alembic
+asyncpg
+python-jose[cryptography]
+# passlib[bcrypt]
+passlib
+bcrypt
+slowapi
+python-dotenv
+python-magic
+filetype
+# python-magic-bin
+aiosqlite
+cloudinary
+
