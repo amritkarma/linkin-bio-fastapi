@@ -1,79 +1,72 @@
-import asyncio
+import os
 from logging.config import fileConfig
-from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from sqlalchemy import create_engine, pool
 from alembic import context
 
-from app.database import Base  # ✅ Import your async Base
-from app.models import *       # ✅ Ensure all models are imported
+# Import your Base metadata here
+from app.models import Base  # Adjust this import as needed
 
-from dotenv import load_dotenv
-import os
-
-load_dotenv()
-
-# Load config
 config = context.config
-fileConfig(config.config_file_name)
 
-# Set SQLAlchemy URL
-# DATABASE_URL = os.getenv("DATABASE_URL")
+# Load DB env variables
+db_user = os.getenv("DB_USER")
+db_password = os.getenv("DB_PASSWORD")
+db_host = os.getenv("DB_HOST")
+db_port = os.getenv("DB_PORT")
+db_name = os.getenv("DB_NAME")
 
-DEBUG = os.getenv("DEBUG", "true").lower() == "true"
+if not all([db_user, db_password, db_host, db_port, db_name]):
+    raise RuntimeError("One or more database environment variables are not set!")
 
-if DEBUG:
-    DATABASE_URL = "sqlite+aiosqlite:///./dev.db"  # Use async SQLite driver
-    connect_args = {"check_same_thread": False}
-else:
-    DB_USER = os.getenv("DB_USER")
-    DB_PASSWORD = os.getenv("DB_PASSWORD")
-    DB_HOST = os.getenv("DB_HOST", "localhost")
-    DB_PORT = os.getenv("DB_PORT", "5432")
-    DB_NAME = os.getenv("DB_NAME")
+# Construct sync DB URL (replace asyncpg with psycopg2 for Alembic)
+database_url = f"postgresql+psycopg2://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
 
-    DATABASE_URL = f"postgresql+asyncpg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+# Set it for Alembic config
+config.set_main_option("sqlalchemy.url", database_url)
 
-if DATABASE_URL is None:
-    raise RuntimeError("DATABASE_URL not set in environment")
+# Set up Python logging config from alembic.ini
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", DATABASE_URL)
-
+# Import your model's MetaData object for 'autogenerate' support
 target_metadata = Base.metadata
 
-# === Async run ===
-def run_migrations_offline():
+
+def run_migrations_offline() -> None:
+    """Run migrations in 'offline' mode (generates SQL scripts)."""
+    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=DATABASE_URL,
+        url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
     )
+
     with context.begin_transaction():
         context.run_migrations()
 
-def do_run_migrations(connection):
-    context.configure(
-        connection=connection,
-        target_metadata=target_metadata,
-    )
-    with context.begin_transaction():
-        context.run_migrations()
 
-async def run_migrations_online():
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section),
-        prefix="sqlalchemy.",
+def run_migrations_online() -> None:
+    """Run migrations in 'online' mode (apply directly to DB)."""
+    connectable = create_engine(
+        config.get_main_option("sqlalchemy.url"),
         poolclass=pool.NullPool,
     )
 
-    async with connectable.begin() as conn:
-        await conn.run_sync(do_run_migrations)
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            # Optional: enable type comparison for autogenerate
+            compare_type=True,
+        )
 
-def main():
-    if context.is_offline_mode():
-        run_migrations_offline()
-    else:
-        asyncio.run(run_migrations_online())
+        with context.begin_transaction():
+            context.run_migrations()
 
-main()
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    run_migrations_online()
