@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncAttrs
+from sqlalchemy.ext.asyncio import (create_async_engine, async_sessionmaker, 
+                                    AsyncAttrs)
 from sqlalchemy.orm import DeclarativeBase
 
 # Load environment variables
@@ -24,19 +25,19 @@ else:
     connect_args = {}
 
 # ✅ Create async engine
-# async_engine = create_async_engine(DATABASE_URL, echo=True, connect_args=connect_args)
 async_engine = create_async_engine(
     DATABASE_URL,
     echo=True,
-    pool_size=5,
-    max_overflow=0,
-    connect_args=connect_args,
+    connect_args=connect_args
 )
 
 
 # ✅ Async session factory
 AsyncSessionLocal = async_sessionmaker(
-    bind=async_engine, expire_on_commit=False, autoflush=False, autocommit=False
+    bind=async_engine,
+    expire_on_commit=False,
+    autoflush=False,
+    autocommit=False
 )
 
 
