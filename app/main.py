@@ -1,7 +1,14 @@
 import os
+import sys
 import uuid
 import logging
+from pathlib import Path
 from typing import List, Optional
+
+# Ensure parent directory is in path (for when run directly by uvicorn reloader)
+_parent_dir = Path(__file__).parent.parent
+if str(_parent_dir) not in sys.path:
+    sys.path.insert(0, str(_parent_dir))
 
 from fastapi import (
     FastAPI, Depends, HTTPException, status, Header,
@@ -34,9 +41,12 @@ from app.crud import (
     get_links_by_user_id, get_link_by_id, create_link, update_link, delete_link,
     update_user_profile
 )
-from app.auth import create_access_token, decode_access_token
-from app.database import async_engine, AsyncSessionLocal
-from app.dependencies import get_current_user
+from app.auth import (
+    create_access_token, create_refresh_token,
+    decode_access_token, decode_refresh_token
+)
+from jose import JWTError, ExpiredSignatureError
+from app.dependencies import get_current_user, get_db
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -87,10 +97,20 @@ app.add_middleware(
 if DEBUG and not USE_CLOUDINARY:
     app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
 
-# === Dependency: Async DB Session ===
-async def get_db() -> AsyncSession:
-    async with AsyncSessionLocal() as session:
-        yield session
+# === Database Initialization ===
+@app.on_event("startup")
+async def startup_event():
+    """Create database tables on startup (development only)."""
+    if DEBUG:
+        try:
+            from app.database import async_engine, Base
+            from app import models  # Import models to register them with Base
+            
+            async with async_engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("Database tables created successfully")
+        except Exception as e:
+            logger.warning(f"Could not create tables (they may already exist): {e}")
 
 # === Dependency: Current Authenticated User ===
 # async def get_current_user(
@@ -122,21 +142,92 @@ async def get_db() -> AsyncSession:
 @app.post("/register", response_model=Token)
 @limiter.limit("5/minute")
 async def register(user: UserCreate, request: Request, db: AsyncSession = Depends(get_db)):
-    if await get_user_by_username(db, user.username):
+    try:
+        # Check if username already exists
+        existing_user = await get_user_by_username(db, user.username)
+        if existing_user:
+            raise HTTPException(
+                status_code=400, detail="Username already registered")
+        
+        # Create new user
+        user_obj = await create_user(db, user)
+        
+        # Generate tokens
+        access_token = create_access_token({"sub": user_obj.username})
+        refresh_token = create_refresh_token({"sub": user_obj.username})
+        
+        logger.info(f"User registered successfully: {user_obj.username}")
+        
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Registration error: {e}", exc_info=True)
         raise HTTPException(
-            status_code=400, detail="Username already registered")
-    user_obj = await create_user(db, user)
-    token = create_access_token({"sub": user_obj.username})
-    return {"access_token": token, "token_type": "bearer"}
+            status_code=500, 
+            detail=f"Registration failed: {str(e)}"
+        )
 
 @app.post("/login", response_model=Token)
 @limiter.limit("10/minute")
 async def login(form: UserLogin, request: Request, db: AsyncSession = Depends(get_db)):
-    user = await authenticate_user(db, form.username, form.password)
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    token = create_access_token({"sub": user.username})
-    return {"access_token": token, "token_type": "bearer"}
+    try:
+        user = await authenticate_user(db, form.username, form.password)
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        
+        access_token = create_access_token({"sub": user.username})
+        refresh_token = create_refresh_token({"sub": user.username})
+        
+        logger.info(f"User logged in successfully: {user.username}")
+        
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Login failed. Please try again."
+        )
+
+@app.post("/refresh", response_model=Token)
+@limiter.limit("20/minute")
+async def refresh_token(request: Request, db: AsyncSession = Depends(get_db)):
+    try:
+        body = await request.json()
+        refresh_token_value = body.get("refresh_token")
+        if not refresh_token_value:
+            raise HTTPException(status_code=401, detail="Refresh token required")
+        
+        payload = decode_refresh_token(refresh_token_value)
+        username = payload.get("sub")
+        if not username:
+            raise HTTPException(status_code=401, detail="Invalid refresh token")
+        
+        user = await get_user_by_username(db, username)
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+        
+        access_token = create_access_token({"sub": user.username})
+        new_refresh_token = create_refresh_token({"sub": user.username})
+        return {
+            "access_token": access_token,
+            "refresh_token": new_refresh_token,
+            "token_type": "bearer"
+        }
+    except ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Refresh token has expired")
+    except JWTError as e:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
 
 # === Link Endpoints ===
 @app.get("/users/{username}/links", response_model=List[LinkOut])

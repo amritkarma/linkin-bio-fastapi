@@ -2,23 +2,33 @@ from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import update, delete
-from . import models, schemas, auth
+from app import models, schemas, auth
 
 async def get_user_by_username(db: AsyncSession, username: str):
     result = await db.execute(select(models.User).where(models.User.username == username))
     return result.scalar_one_or_none()
 
 async def create_user(db: AsyncSession, user: schemas.UserCreate):
-    hashed_pw = auth.hash_password(user.password)
-    db_user = models.User(
-        username=user.username,
-        email=user.email,
-        hashed_password=hashed_pw
-    )
-    db.add(db_user)
-    await db.commit()
-    await db.refresh(db_user)
-    return db_user
+    try:
+        # Hash password with Argon2
+        hashed_pw = auth.hash_password(user.password)
+        
+        # Create user object
+        db_user = models.User(
+            username=user.username,
+            email=user.email,
+            hashed_password=hashed_pw
+        )
+        
+        # Add to database
+        db.add(db_user)
+        await db.commit()
+        await db.refresh(db_user)
+        
+        return db_user
+    except Exception as e:
+        await db.rollback()
+        raise
 
 async def authenticate_user(db: AsyncSession, username: str, password: str):
     user = await get_user_by_username(db, username)
@@ -72,7 +82,8 @@ async def delete_link(db: AsyncSession, link_id: int, user_id: int):
     )
     link = result.scalar_one_or_none()
     if link:
-        await db.delete(link)
+        stmt = delete(models.Link).where(models.Link.id == link_id, models.Link.user_id == user_id)
+        await db.execute(stmt)
         await db.commit()
     return link
 
