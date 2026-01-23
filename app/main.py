@@ -71,7 +71,17 @@ if USE_CLOUDINARY:
     )
 
 # === Logging ===
-logging.basicConfig(level=logging.DEBUG if DEBUG else logging.INFO)
+# Set logging level - reduce aiosqlite verbosity in production
+logging.basicConfig(
+    level=logging.DEBUG if DEBUG else logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# Reduce verbosity of aiosqlite and sqlalchemy in production
+if not DEBUG:
+    logging.getLogger('aiosqlite').setLevel(logging.WARNING)
+    logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 # === FastAPI App ===
@@ -108,9 +118,9 @@ async def startup_event():
             
             async with async_engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
-            logger.info("Database tables created successfully")
+            logger.info("✅ Database tables verified/created successfully")
         except Exception as e:
-            logger.warning(f"Could not create tables (they may already exist): {e}")
+            logger.warning(f"⚠️ Could not create tables (they may already exist): {e}")
 
 # === Dependency: Current Authenticated User ===
 # async def get_current_user(

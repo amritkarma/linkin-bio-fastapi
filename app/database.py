@@ -25,9 +25,10 @@ else:
     connect_args = {}
 
 # ✅ Create async engine
+# Only echo SQL queries in DEBUG mode to reduce log noise
 async_engine = create_async_engine(
     DATABASE_URL,
-    echo=True,
+    echo=DEBUG,  # Only show SQL queries in debug mode
     connect_args=connect_args
 )
 
